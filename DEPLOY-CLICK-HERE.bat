@@ -1,68 +1,43 @@
 @echo off
-echo.
+chcp 65001 >nul
 echo ===========================================
-echo   DEPLOYMENT HELPER - LinkedIn RSS Poster
+echo  LinkedIn RSS Poster - Deployment Tool
 echo ===========================================
 echo.
-echo This script will help you push your code to GitHub.
+echo This script will:
+echo  1. Install Git (if not present)
+echo  2. Initialize Git repository
+echo  3. Push code to GitHub
+echo  4. Prepare for Render deployment
+echo.
+echo Press any key to continue...
+pause >nul
 echo.
 
-:: Check for Git
-where git >nul 2>nul
+REM Check if PowerShell is available
+powershell -Command "Get-Host" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Git is not installed!
-    echo Please install Git from https://git-scm.com/download/win
+    echo ❌ PowerShell is not available on this system.
+    echo 📥 Please install PowerShell or use the manual deployment method.
+    echo.
+    echo 📖 See DEPLOY.md for manual instructions.
     pause
-    exit /b
+    exit /b 1
 )
 
-:: Check for PowerShell
-where powershell >nul 2>nul
-if %errorlevel% neq 0 (
-    echo [ERROR] PowerShell is not found!
-    pause
-    exit /b
-)
-
-echo [1/5] Initializing Git repository...
-git init
-git branch -M main
-
-echo [2/5] Adding your remote...
-echo Please ensure you have created the repository: linkedin-rss-poster
-set /p GITHUB_USER="Enter your GitHub Username: "
-git remote add origin https://github.com/%GITHUB_USER%/linkedin-rss-poster.git
-
-echo [3/5] Staging files...
-git add .
-
-echo [4/5] Committing files...
-git commit -m "Initial commit prior to deployment"
-
-echo [5/5] Pushing to GitHub...
+REM Run the PowerShell deployment script
+echo 🚀 Starting deployment script...
 echo.
-echo Note: A popup might appear asking you to sign in to GitHub.
-echo.
-git push -u origin main
+powershell -ExecutionPolicy Bypass -File "deploy-full.ps1"
 
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Push failed. 
-    echo 1. Check if the repository 'linkedin-rss-poster' exists.
-    echo 2. Check your internet connection.
-    echo 3. Check your permissions.
+    echo ❌ Deployment script failed.
+    echo 💡 Check the error messages above.
     pause
-    exit /b
+    exit /b 1
 )
 
 echo.
-echo ===========================================
-echo   SUCCESS! 🚀
-echo ===========================================
-echo.
-echo Now you can go to Render.com and deploy:
-echo 1. New Web Service
-echo 2. Connect your GitHub repository
-echo 3. Click Deploy
-echo.
+echo ✅ Deployment preparation complete!
 pause
