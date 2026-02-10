@@ -1,4 +1,28 @@
-  let html = `
+import express from 'express';
+import path from 'path';
+import { DatabaseService } from './services/database';
+import { Scheduler } from './services/scheduler';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Initialize database (will be ephemeral on Vercel)
+let db: DatabaseService;
+try {
+    db = new DatabaseService();
+} catch (error) {
+    console.error('Database initialization failed:', error);
+}
+
+app.use(express.static('public'));
+app.use(express.json());
+
+// Home page - show all drafts
+app.get('/', (req, res) => {
+    const drafts = db.getDrafts(50);
+    const stats = db.getStats();
+
+    let html = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -435,28 +459,28 @@
             <div class="feed-container" id="postsContainer">
 `;
 
-  if (drafts.length === 0) {
-    html += `
+    if (drafts.length === 0) {
+        html += `
                 <div style="text-align:center; padding: 40px; color: var(--text-muted);">
                     [ NO_DATA_IN_BUFFER ]<br>
                     INITIATE_FETCH_SEQUENCE
                 </div>
     `;
-  } else {
-    drafts.forEach((draft, index) => {
-        const content = draft.content
-            .replace(/\n/g, '<br>')
-            .replace(/[']/g, "\\'") // Escape single quotes for JS if needed, mostly handled by browser
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
-            
-        const cat = (draft as any).category || 'tech';
-        
-        // Stagger animation delay based on index
-        const delay = (index % 10) * 0.1; 
+    } else {
+        drafts.forEach((draft, index) => {
+            const content = draft.content
+                .replace(/\n/g, '<br>')
+                .replace(/[']/g, "\\'") // Escape single quotes for JS if needed, mostly handled by browser
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
 
-        html += `
+            const cat = (draft as any).category || 'tech';
+
+            // Stagger animation delay based on index
+            const delay = (index % 10) * 0.1;
+
+            html += `
                 <div class="log-entry" data-category="${cat}" style="animation-delay: ${delay}s">
                     <div class="entry-meta">
                         <span>ID: #${String(index + 1).padStart(3, '0')}</span>
@@ -476,10 +500,10 @@
                     </button>
                 </div>
         `;
-    });
-  }
+        });
+    }
 
-  html += `
+    html += `
             </div> <!-- End feed-container -->
         </div> <!-- End interface-panel -->
     </div> <!-- End device-chassis -->
@@ -540,3 +564,83 @@
     </script>
 </body>
 </html>`;
+
+    res.send(html);
+});
+
+
+// Trigger fetch
+app.post('/fetch', (req, res) => {
+    const scheduler = new Scheduler();
+    scheduler.runOnce().then(() => {
+        res.json({ success: true });
+    }).catch(error => {
+        res.status(500).json({ error: error.message });
+    });
+});
+
+// Export all drafts as markdown
+app.get('/export', (req, res) => {
+    const drafts = db.getDrafts(100);
+
+    let markdown = `# LinkedIn Post Drafts - ${new Date().toISOString().split('T')[0]}\n\n`;
+    markdown += `Generated ${drafts.length} posts from tech & AI RSS feeds\n\n`;
+    markdown += '---\n\n';
+
+    drafts.forEach((draft, index) => {
+        markdown += `## Post ${index + 1}: ${draft.title}\n\n`;
+        markdown += `**Source:** [${draft.link}](${draft.link})\n\n`;
+        markdown += `**Created:** ${draft.createdAt.toLocaleDateString()}\n\n`;
+        markdown += '**Content:**\n\n';
+        markdown += '\`\`\`\n' + draft.content + '\n\`\`\`\n\n';
+        markdown += `**Hashtags:** ${draft.hashtags.join(' ')}\n\n`;
+        markdown += '---\n\n';
+    });
+
+    res.setHeader('Content-Type', 'text/markdown');
+    res.setHeader('Content-Disposition', `attachment; filename=linkedin-drafts-${new Date().toISOString().split('T')[0]}.md`);
+    res.send(markdown);
+});
+
+// API endpoint to get drafts as JSON
+app.get('/api/drafts', (req, res) => {
+    const drafts = db.getDrafts(100);
+    res.json(drafts);
+});
+
+// API endpoint to get drafts by category
+app.get('/api/drafts/:category', (req, res) => {
+    const category = req.params.category;
+    const drafts = db.getDraftsByCategory(category);
+    res.json(drafts);
+});
+
+// API endpoint to get all categories with counts
+app.get('/api/categories', (req, res) => {
+    const drafts = db.getDrafts(100);
+    const counts: Record<string, number> = {};
+    drafts.forEach(d => {
+        const cat = (d as any).category || 'tech';
+        counts[cat] = (counts[cat] || 0) + 1;
+    });
+    res.json(counts);
+});
+
+// Get stats
+app.get('/api/stats', (req, res) => {
+    res.json(db.getStats());
+});
+
+// Export for Vercel serverless functions
+export default app;
+
+// Start server only if running locally (not on Vercel)
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log('\n🌐 LinkedIn RSS Poster Web Interface');
+        console.log('========================================');
+        console.log(`📱 Open your browser and go to:`);
+        console.log(`   http://localhost:${PORT}\n`);
+        console.log('Press Ctrl+C to stop the server\n');
+    });
+}
