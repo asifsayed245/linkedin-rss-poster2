@@ -1,101 +1,136 @@
 import Parser from 'rss-parser';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { sources, Article } from '../config/sources';
+import { RSS_SOURCES, Article, RssSource } from '../config/sources';
 import { config } from '../config/config';
-import { DatabaseService } from './database';
+
+const parser = new Parser({
+  timeout: config.rss.fetchTimeout,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+});
 
 export class RssFetcher {
-  private parser: Parser;
-  private db: DatabaseService;
+  async fetchAllSources(): Promise<Article[]> {
+    const allArticles: Article[] = [];
+    const enabledSources = RSS_SOURCES.filter(s => s.enabled);
 
-  constructor(db: DatabaseService) {
-    this.parser = new Parser();
-    this.db = db;
-  }
+    console.log(`📡 Fetching from ${enabledSources.length} RSS sources...\n`);
 
-  async fetchAndStore() {
-    console.log('📡 Starting RSS Fetch cycle...');
-    
-    for (const source of sources) {
-      if (!source.enabled) continue;
-      
+    for (const source of enabledSources) {
       try {
-        console.log(`   fetching: ${source.name}...`);
-        const feed = await this.parser.parseURL(source.url);
-        
-        let count = 0;
-        for (const item of feed.items) {
-          if (count >= config.rss.maxPerSource) break;
-
-          // Skip if already exists
-          // GUID is standard, but some feeds lack it, so fallback to link
-          const guid = item.guid || item.link || item.title;
-          if (!guid || this.db.articleExists(guid)) continue;
-
-          // Process content
-          const content = await this.processContent(item);
-          
-          if (!content || content.length < config.posts.minLength) {
-             continue; // Skip short/empty articles
-          }
-
-          const article: Article = {
-            title: item.title || 'Untitled',
-            link: item.link || '',
-            content: content,
-            contentSnippet: item.contentSnippet,
-            pubDate: item.pubDate || new Date().toISOString(),
-            source: source.name,
-            category: source.category,
-            guid: guid
-          };
-
-          this.db.addArticle(article);
-          count++;
-        }
-        console.log(`   ✅ Added ${count} new articles from ${source.name}`);
-
+        const articles = await this.fetchSource(source);
+        allArticles.push(...articles);
+        console.log(`  ✅ ${source.name}: ${articles.length} articles`);
       } catch (error) {
-        console.error(`   ❌ Error fetching ${source.name}:`, error instanceof Error ? error.message : String(error));
-      }
-    }
-  }
-
-  private async processContent(item: any): Promise<string> {
-    // 1. Try content from RSS feed first
-    const fullText = item['content:encoded'] || item.content;
-    
-    if (fullText && fullText.length > 500) {
-      return this.cleanHtml(fullText);
-    }
-
-    // 2. If RSS content is thin, scrape the page (basic scraping)
-    if (item.link) {
-      try {
-        const res = await axios.get(item.link, { 
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 5000 
-        });
-        const $ = cheerio.load(res.data);
-        
-        // Remove known junk
-        $('script, style, nav, footer, header, .ads, .comments').remove();
-        
-        // Try generic article selectors
-        const articleText = $('article, main, .post-content, .entry-content').first().text();
-        return articleText.replace(/\s+/g, ' ').trim();
-      } catch (e) {
-        // Fallback to snippet if scraping fails
-        return item.contentSnippet || '';
+        console.error(`  ❌ ${source.name}: Failed to fetch -`, (error as Error).message);
       }
     }
 
-    return item.contentSnippet || '';
+    console.log(`\n📊 Total articles fetched: ${allArticles.length}`);
+    return allArticles;
   }
 
-  private cleanHtml(html: string): string {
-    const $ = cheerio.load(html);
-    return $.text().replace(/\s+/g, ' ').trim();
+  private async fetchSource(source: RssSource): Promise<Article[]> {
+    const feed = await parser.parseURL(source.url);
+    const articles: Article[] = [];
+
+    const items = feed.items.slice(0, config.rss.maxArticlesPerSource);
+
+    for (const item of items) {
+      if (!item.title || !item.link) continue;
+
+      // Try to get full content
+      let content = item['content:encoded'] || item.content || item.summary || '';
+      
+      // If content is too short, try to fetch from URL
+      if (content.length < config.posts.minArticleLength) {
+        try {
+          content = await this.fetchFullContent(item.link);
+        } catch (error) {
+          // Use what we have
+        }
+      }
+
+      // Clean up content
+      content = this.cleanContent(content);
+
+      // Skip if content is too short after cleaning
+      if (content.length < config.posts.minArticleLength) {
+        continue;
+      }
+
+      // Extract summary (first 300 characters, roughly 2-3 sentences)
+      const rawSummary = item.summary || item.contentSnippet || content.substring(0, 500);
+      let summary = this.cleanContent(rawSummary);
+      
+      // Truncate to ~300 chars at sentence boundary
+      if (summary.length > 300) {
+        const truncated = summary.substring(0, 300);
+        const lastPeriod = truncated.lastIndexOf('.');
+        summary = truncated.substring(0, lastPeriod + 1).trim();
+      }
+
+      // Skip if summary is too short
+      if (summary.length < 50) {
+        console.warn(`  ⚠️ Skipping article with insufficient summary: ${item.title?.substring(0, 50)}`);
+        continue;
+      }
+
+      articles.push({
+        title: item.title,
+        link: item.link,
+        content: content.substring(0, config.posts.maxArticleLength),
+        summary: summary,
+        source: source.name,
+        category: source.category,
+        publishedAt: item.pubDate ? new Date(item.pubDate) : new Date(),
+        fetchedAt: new Date(),
+        processed: false,
+      });
+    }
+
+    return articles;
+  }
+
+  private async fetchFullContent(url: string): Promise<string> {
+    try {
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      });
+
+      const $ = cheerio.load(response.data);
+      
+      // Remove script and style elements
+      $('script, style, nav, footer, header, aside').remove();
+      
+      // Try to find article content
+      const article = $('article').text() || 
+                      $('[class*="article"]').text() || 
+                      $('[class*="content"]').text() || 
+                      $('main').text() ||
+                      $('body').text();
+
+      return article.trim();
+    } catch (error) {
+      return '';
+    }
+  }
+
+  private cleanContent(content: string): string {
+    return content
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/\[\s*\+\s*\d+\s+chars\s*\]/g, '')
+      .trim();
   }
 }

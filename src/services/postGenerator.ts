@@ -1,127 +1,268 @@
-import { DatabaseService } from './database';
-import { config } from '../config/config';
 import axios from 'axios';
+import { Article, LinkedInPost } from '../config/sources';
+import { config } from '../config/config';
+
+enum LogLevel {
+  DEBUG = 'DEBUG',
+  INFO = 'INFO',
+  WARN = 'WARN',
+  ERROR = 'ERROR',
+}
+
+interface LogEntry {
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  context?: Record<string, unknown>;
+}
+
+class Logger {
+  private static log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
+    const entry: LogEntry = {
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+      context,
+    };
+    console.log(JSON.stringify(entry));
+  }
+
+  static debug(message: string, context?: Record<string, unknown>): void {
+    if (process.env.DEBUG) {
+      this.log(LogLevel.DEBUG, message, context);
+    }
+  }
+
+  static info(message: string, context?: Record<string, unknown>): void {
+    this.log(LogLevel.INFO, message, context);
+  }
+
+  static warn(message: string, context?: Record<string, unknown>): void {
+    this.log(LogLevel.WARN, message, context);
+  }
+
+  static error(message: string, context?: Record<string, unknown>): void {
+    this.log(LogLevel.ERROR, message, context);
+  }
+}
 
 export class PostGenerator {
-  private db: DatabaseService;
+  private readonly maxRetries = 3;
+  private readonly retryDelay = 2000;
 
-  // Hooks to make the post engaging
-  private hooks = [
-    "🔥 This just happened in AI:",
-    "💡 Interesting development:",
-    "🤖 The AI landscape is shifting fast:",
-    "👀 Have you seen this?",
-    "🚀 Major update in tech:",
-    "⚡ Quick insight for my network:",
-  ];
+  async generatePost(article: Article): Promise<LinkedInPost | null> {
+    Logger.info('Starting post generation', { articleTitle: article.title, source: article.source });
 
-  constructor(db: DatabaseService) {
-    this.db = db;
-  }
-
-  async generateDailyPosts() {
-    const todayCount = this.db.getPostsGeneratedToday();
-    if (todayCount >= config.posts.maxPerDay) {
-      console.log('✅ Daily post limit reached. Skipping generation.');
-      return;
-    }
-
-    const remaining = config.posts.maxPerDay - todayCount;
-    const articles = this.db.getUnusedArticles(remaining);
-
-    if (articles.length === 0) {
-      console.log('⚠️ No new articles to process.');
-      return;
-    }
-
-    console.log(`🏭 Generating ${articles.length} posts...`);
-
-    for (const article of articles) {
-      try {
-        const summary = await this.summarizeContent(article.content || article.snippet || article.title);
-        const post = this.formatLinkedInPost(article, summary);
-        
-        this.db.savePost({
-          articleId: article.id,
-          originalTitle: article.title,
-          url: article.link,
-          summary: summary,
-          content: post,
-          hashtags: this.generateHashtags(article),
-          status: 'draft'
-        });
-
-        this.db.markArticleUsed(article.id);
-        console.log(`✅ Draft generated for: ${article.title}`);
-        
-      } catch (error) {
-        console.error(`❌ Failed to generate post for ${article.title}:`, error);
+    try {
+      const content = await this.summarizeAndTransform(article);
+      
+      if (!content) {
+        Logger.warn('Post generation returned null content', { articleTitle: article.title });
+        return null;
       }
+
+      const hashtags = this.generateHashtags(article);
+      const post: LinkedInPost = {
+        articleId: article.id!,
+        content,
+        hashtags,
+        createdAt: new Date(),
+        status: 'draft',
+      };
+
+      Logger.info('Post generated successfully', { 
+        articleTitle: article.title, 
+        contentLength: content.length,
+        hashtagCount: hashtags.length 
+      });
+
+      return post;
+    } catch (error) {
+      Logger.error('Post generation failed', { 
+        articleTitle: article.title, 
+        error: (error as Error).message 
+      });
+      return null;
     }
   }
 
-  private async summarizeContent(text: string): Promise<string> {
-    // If no HuggingFace token, use simple fallback truncation
-    if (!config.huggingFace.token) {
-        return this.fallbackSummarize(text);
+  private async summarizeAndTransform(article: Article): Promise<string> {
+    // If no HuggingFace token, use fallback method
+    if (!config.huggingface.token) {
+      Logger.debug('No HuggingFace token, using fallback generation');
+      return this.fallbackGeneration(article);
     }
 
     try {
-      // Use Hugging Face Inference API
+      Logger.debug('Calling HuggingFace API', { model: config.huggingface.model });
+      
+      const prompt = this.createPrompt(article);
+      
       const response = await axios.post(
-        `https://api-inference.huggingface.co/models/${config.huggingFace.model}`,
-        { inputs: text.substring(0, 3000) }, // Truncate to avoid context errors
+        `https://api-inference.huggingface.co/models/${config.huggingface.model}`,
         {
-          headers: { Authorization: `Bearer ${config.huggingFace.token}` },
-          timeout: 20000 // 20s timeout
+          inputs: prompt,
+          parameters: {
+            max_length: 350,
+            min_length: 100,
+            do_sample: true,
+            temperature: 0.7,
+            top_p: 0.9,
+            repetition_penalty: 1.2,
+          },
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.huggingface.token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: config.huggingface.timeout,
         }
       );
 
       if (response.data && response.data[0] && response.data[0].summary_text) {
-        return response.data[0].summary_text;
+        Logger.debug('HuggingFace API returned successfully');
+        return this.formatLinkedInPost(response.data[0].summary_text, article);
       }
-      
-      throw new Error('Invalid API response');
-      
+
+      Logger.warn('HuggingFace API returned unexpected format, using fallback');
     } catch (error) {
-      console.warn('⚠️ AI Summarization failed (using fallback):');
-      return this.fallbackSummarize(text);
+      Logger.warn('HuggingFace API failed, using fallback', {
+        error: (error as Error).message,
+        status: (error as { response?: { status?: number } }).response?.status
+      });
     }
+
+    return this.fallbackGeneration(article);
   }
 
-  private fallbackSummarize(text: string): string {
-    // Simple heuristic summary: First 3 sentences
-    const sentences = text.match(/[^\.!\?]+[\.!\?]+/g) || [text];
-    return sentences.slice(0, 3).join(' ');
+  private createPrompt(article: Article): string {
+    return `Transform this article summary into an engaging LinkedIn post:
+
+Title: ${article.title}
+Summary: ${article.summary}
+Source: ${article.source}
+Category: ${article.category}
+
+Write a LinkedIn post that:
+1. Starts with a hook or thought-provoking question
+2. Mentions "as per the latest update" when referencing the article insights
+3. Expands on the key points from the summary
+4. Adds personal commentary on why this matters
+5. Ends with an engaging question for the community
+6. Keeps it under 300 words and conversational`;
   }
 
-  private formatLinkedInPost(article: any, summary: string): string {
-    const hook = this.hooks[Math.floor(Math.random() * this.hooks.length)];
-    const thoughts = "Applying this to our work in tech:"; // Placeholder for manual edit
-    const hashtags = this.generateHashtags(article).map(t => `#${t}`).join(' ');
+  private formatLinkedInPost(summary: string, article: Article): string {
+    let formatted = summary
+      .replace(/^\s*Summary:\s*/i, '')
+      .replace(/\n\s*\n/g, '\n\n')
+      .trim();
 
-    return `
-${hook}
+    formatted += `\n\nAs per the latest update from ${article.source}: "${article.summary}"`;
+
+    const hashtags = this.generateHashtags(article);
+    formatted += `\n\n${hashtags.join(' ')}`;
+
+    formatted += `\n\n🔗 Read more: <a href="${article.link}" target="_blank">${article.link}</a>`;
+
+    return formatted;
+  }
+
+  private fallbackGeneration(article: Article): string {
+    const hooks = [
+      '🚀 Just came across something fascinating:',
+      '💡 Interesting development in tech:',
+      '🤔 Food for thought:',
+      '⚡ Breaking:',
+      '🔍 Worth watching:',
+    ];
+
+    const hook = hooks[Math.floor(Math.random() * hooks.length)];
+    
+    const commentaryOptions = {
+      ai: [
+        "This is another exciting step forward in AI. The implications for how we work and create are profound.",
+        "AI continues to push boundaries in ways we couldn't have imagined just years ago.",
+        "The rapid evolution of AI is reshaping industries at an unprecedented pace.",
+        "These AI advancements remind us how quickly the technology landscape is transforming.",
+      ],
+      tech: [
+        "The pace of innovation in tech never ceases to amaze. This could change how we approach problems in this space.",
+        "Technology evolves so rapidly that today's breakthrough becomes tomorrow's standard.",
+        "We're witnessing another example of how tech continues to redefine what's possible.",
+        "Innovation in this space moves fast, and this development proves it once again.",
+      ],
+      science: [
+        "Science continues to push the boundaries of what we know about our world.",
+        "This discovery adds another piece to the puzzle of understanding our universe.",
+        "Research like this reminds us how much more there is to learn.",
+        "Science never ceases to amaze with its ability to reveal the unknown.",
+      ],
+    };
+
+    const category = article.category === 'ai' ? 'ai' : article.category === 'science' ? 'science' : 'tech';
+    const commentary = commentaryOptions[category][Math.floor(Math.random() * commentaryOptions[category].length)];
+
+    const questions = [
+      "What do you think about this development?",
+      "How do you see this impacting your work?",
+      "Would you use something like this?",
+      "What's your take on this trend?",
+      "Does this align with what you're seeing in the industry?",
+      "How might this shape the future of our field?",
+    ];
+    const question = questions[Math.floor(Math.random() * questions.length)];
+
+    const hashtags = this.generateHashtags(article);
+
+    return `${hook}
 
 ${article.title}
 
-${summary}
+As per the latest update from ${article.source}: "${article.summary}"
 
-----
-${thoughts}
-👇 What are your thoughts on this?
+${commentary}
 
-🔗 Full story: ${article.link}
+${question}
 
-${hashtags}
-    `.trim();
+${hashtags.join(' ')}
+
+🔗 Read more: <a href="${article.link}" target="_blank">${article.link}</a>`;
   }
 
-  private generateHashtags(article: any): string[] {
-    const baseTags = ['TechNews', 'Innovation', 'Technology'];
-    if (article.category === 'ai' || article.title.toLowerCase().includes('ai')) {
-      baseTags.unshift('ArtificialIntelligence', 'AI', 'MachineLearning');
+  private generateHashtags(article: Article): string[] {
+    const baseHashtags = ['#TechNews', '#Innovation', '#Technology'];
+    
+    const categoryTags: Record<string, string[]> = {
+      ai: ['#AI', '#ArtificialIntelligence', '#MachineLearning', '#FutureOfWork'],
+      tech: ['#Tech', '#DigitalTransformation', '#Startup'],
+      science: ['#Science', '#Research', '#Discovery'],
+    };
+
+    const specificTags = categoryTags[article.category] || categoryTags.tech;
+    
+    // Extract potential hashtags from title
+    const titleWords = article.title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter(word => word.length > 4)
+      .slice(0, 2)
+      .map(word => '#' + word.charAt(0).toUpperCase() + word.slice(1));
+
+    return [...baseHashtags, ...specificTags, ...titleWords].slice(0, 8);
+  }
+
+  private validateGeneratedPost(content: string): boolean {
+    const minLength = 50;
+    const maxLength = 3000;
+
+    if (content.length < minLength || content.length > maxLength) {
+      Logger.warn('Generated post failed validation', { length: content.length, minLength, maxLength });
+      return false;
     }
-    return [...new Set(baseTags)]; // Unique tags
+
+    return true;
   }
 }
