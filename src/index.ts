@@ -1,114 +1,133 @@
-import express from 'express';
-import { RssFetcher } from './services/rssFetcher';
-import { PostGenerator } from './services/postGenerator';
-import { Scheduler } from './services/scheduler';
+import { config, validateConfig } from './config/config';
 import { DatabaseService } from './services/database';
+import { RssFetcher } from './services/rssFetcher';
+import { Scheduler } from './services/scheduler';
 import { ReviewInterface } from './services/review';
-import { config } from './config/config';
-import fs from 'fs';
-import path from 'path';
-
-// Initialize services
-const db = new DatabaseService();
-const fetcher = new RssFetcher(db);
-const generator = new PostGenerator(db);
-const scheduler = new Scheduler(fetcher, generator);
-const reviewInterface = new ReviewInterface(db);
-
-// Handle command line arguments
-const args = process.argv.slice(2);
+import { PostGenerator } from './services/postGenerator';
 
 async function main() {
-  // Check for specific commands
-  if (args.includes('--fetch')) {
-    console.log('🔄 Manually triggering fetch and generate cycle...');
-    await scheduler.runDailyJob();
-    process.exit(0);
-  }
-  
-  if (args.includes('--review')) {
-    await reviewInterface.startReview();
-    // review interface handles exit
-    return;
-  }
+  const args = process.argv.slice(2);
+  const command = args[0] || '--help';
 
-  if (args.includes('--schedule')) {
-    console.log(`⏰ Starting scheduler (Running at ${config.scheduler.hour}:${config.scheduler.minute.toString().padStart(2, '0')} ${config.scheduler.timezone})`);
-    scheduler.start();
-    // Keep process alive
-    return;
-  }
+  // Validate configuration
+  validateConfig();
 
-  if (args.includes('--stats')) {
-    reviewInterface.showStats();
-    process.exit(0);
-  }
+  console.log('\n🚀 LinkedIn RSS Poster\n');
 
-  if (args.includes('--export')) {
-    const drafts = db.getDrafts();
-    if (drafts.length === 0) {
-      console.log('No drafts to export.');
-      process.exit(0);
-    }
-    
-    const exportPath = path.join(process.cwd(), 'drafts');
-    if (!fs.existsSync(exportPath)) {
-      fs.mkdirSync(exportPath);
-    }
-    
-    const fileName = `drafts_${new Date().toISOString().split('T')[0]}.json`;
-    fs.writeFileSync(path.join(exportPath, fileName), JSON.stringify(drafts, null, 2));
-    console.log(`✅ Exported ${drafts.length} drafts to ${path.join(exportPath, fileName)}`);
-    process.exit(0);
-  }
+  switch (command) {
+    case '--fetch':
+    case '-f':
+      await runFetch();
+      break;
 
-  if (args.includes('--export-md')) {
-    const drafts = db.getDrafts();
-    if (drafts.length === 0) {
-      console.log('No drafts to export.');
-      process.exit(0);
-    }
-    
-    const exportPath = path.join(process.cwd(), 'drafts');
-    if (!fs.existsSync(exportPath)) {
-      fs.mkdirSync(exportPath);
-    }
-    
-    const fileName = `drafts_${new Date().toISOString().split('T')[0]}.md`;
-    let content = '# LinkedIn Drafts\n\n';
-    
-    drafts.forEach((draft, index) => {
-      content += `## Post ${index + 1}\n\n`;
-      content += `**Source:** [${draft.title}](${draft.url})\n\n`;
-      content += `\`\`\`\n${draft.content}\n\`\`\`\n\n`;
-      content += `---\n\n`;
-    });
-    
-    fs.writeFileSync(path.join(exportPath, fileName), content);
-    console.log(`✅ Exported ${drafts.length} drafts to ${path.join(exportPath, fileName)}`);
-    process.exit(0);
-  }
+    case '--review':
+    case '-r':
+      await runReview();
+      break;
 
-  // Use web interface by default if no args or just --help
-  if (args.length === 0 || args.includes('--help')) {
-    console.log(`
-🤖 LinkedIn RSS Poster - Command Line Interface
+    case '--schedule':
+    case '-s':
+      runScheduler();
+      break;
 
-Usage:
-  npm run fetch      Fetch articles and generate drafts immediately
-  npm run review     Interactive CLI to review and approve drafts
-  npm run schedule   Start the daily scheduler daemon
-  npm run stats      Show database statistics
-  npm run export     Export current drafts to JSON
-  npm run export:md  Export current drafts to Markdown
-  npm start          Start the web interface (default)
-    `);
-    
-    // Fallback to starting web server if just running 'node dist/index.js'
-    if (args.length === 0) {
-        import('./web');
-    }
+    case '--stats':
+      showStats();
+      break;
+
+    case '--export':
+      await exportDrafts();
+      break;
+
+    case '--export-md':
+      await exportMarkdown();
+      break;
+
+    case '--help':
+    case '-h':
+    default:
+      showHelp();
+      break;
   }
 }
 
-main().catch(console.error);
+async function runFetch(): Promise<void> {
+  const scheduler = new Scheduler();
+  await scheduler.runOnce();
+  process.exit(0);
+}
+
+async function runReview(): Promise<void> {
+  const review = new ReviewInterface();
+  await review.showDrafts();
+  process.exit(0);
+}
+
+function runScheduler(): void {
+  const scheduler = new Scheduler();
+  scheduler.start();
+
+  // Keep the process running
+  console.log('   Press Ctrl+C to stop\n');
+
+  // Handle graceful shutdown
+  process.on('SIGINT', () => {
+    console.log('\n\n🛑 Shutting down gracefully...');
+    scheduler.stop();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', () => {
+    scheduler.stop();
+    process.exit(0);
+  });
+}
+
+function showStats(): void {
+  const review = new ReviewInterface();
+  review.showStats();
+  process.exit(0);
+}
+
+async function exportDrafts(): Promise<void> {
+  const review = new ReviewInterface();
+  review.exportDrafts();
+  process.exit(0);
+}
+
+async function exportMarkdown(): Promise<void> {
+  const review = new ReviewInterface();
+  review.exportAsMarkdown();
+  process.exit(0);
+}
+
+function showHelp(): void {
+  console.log('Usage: npm run [command]\n');
+  console.log('Commands:');
+  console.log('  npm run fetch          Fetch RSS feeds and generate posts (one-time)');
+  console.log('  npm run review         View all generated LinkedIn post drafts');
+  console.log('  npm run schedule       Start the daily scheduler');
+  console.log('  npm run stats          Show application statistics');
+  console.log('  npm run export         Export drafts to JSON');
+  console.log('  npm run export:md      Export drafts to Markdown\n');
+  console.log('Options:');
+  console.log('  --fetch, -f            Same as "npm run fetch"');
+  console.log('  --review, -r           Same as "npm run review"');
+  console.log('  --schedule, -s         Same as "npm run schedule"');
+  console.log('  --stats                Show statistics');
+  console.log('  --export               Export to JSON');
+  console.log('  --export-md            Export to Markdown');
+  console.log('  --help, -h             Show this help message\n');
+  console.log('Configuration:');
+  console.log('  Create a .env file with your settings (see .env.example)\n');
+  console.log('Examples:');
+  console.log('  npm run fetch                    # Fetch and generate once');
+  console.log('  npm run schedule                 # Start daily scheduler');
+  console.log('  npm run review                   # View your drafts\n');
+  process.exit(0);
+}
+
+// Run main function
+main().catch(error => {
+  console.error('❌ Fatal error:', error);
+  process.exit(1);
+});

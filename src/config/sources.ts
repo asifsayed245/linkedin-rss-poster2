@@ -1,27 +1,12 @@
-export interface Article {
-  title: string;
-  link: string;
-  content: string;
-  contentSnippet?: string;
-  pubDate: string;
-  source: string;
-  category: string;
-  guid?: string;
-}
-
-export interface LinkedInPost {
-  articleId: number;
-  originalTitle: string;
+export interface RssSource {
+  name: string;
   url: string;
-  summary: string;
-  content: string;
-  hashtags: string[];
-  status: 'draft' | 'approved' | 'posted' | 'rejected';
-  createdAt: string;
+  category: 'ai' | 'tech' | 'science';
+  enabled: boolean;
 }
 
-export const sources = [
-  // --- AI News ---
+export const RSS_SOURCES: RssSource[] = [
+  // AI-focused sources
   {
     name: 'TechCrunch AI',
     url: 'https://techcrunch.com/category/artificial-intelligence/feed/',
@@ -42,12 +27,12 @@ export const sources = [
   },
   {
     name: 'AI Weekly',
-    url: 'https://us12.campaign-archive.com/feed?u=f39692e245b94f7fb693b6d82&id=93051a3d5e',
+    url: 'https://aiweekly.co/rss/',
     category: 'ai',
-    enabled: false, // Often requires parsing email format
+    enabled: true,
   },
-
-  // --- General Tech ---
+  
+  // Tech sources
   {
     name: 'Ars Technica',
     url: 'https://feeds.arstechnica.com/arstechnica/index',
@@ -60,18 +45,65 @@ export const sources = [
     category: 'tech',
     enabled: true,
   },
-  
-  // --- Science / Research ---
   {
     name: 'MIT Technology Review',
     url: 'https://www.technologyreview.com/feed/',
-    category: 'science',
+    category: 'tech',
     enabled: true,
   },
   {
-    name: 'Hacker News (AI/Tech)',
-    url: 'https://hnrss.org/newest?q=AI+OR+LLM+OR+Machine+Learning',
+    name: 'Hacker News (Tech)',
+    url: 'https://hnrss.org/newest?q=ai+OR+machine+learning+OR+tech',
     category: 'tech',
     enabled: true,
-  }
+  },
+  
+  // Additional AI & Tech sources
+  {
+    name: 'Hacker News Top',
+    url: 'https://news.ycombinator.com/rss',
+    category: 'tech',
+    enabled: true,
+  },
+  {
+    name: 'OpenAI News',
+    url: 'https://openai.com/news/rss.xml',
+    category: 'ai',
+    enabled: true,
+  },
+  {
+    name: 'Wired AI',
+    url: 'https://www.wired.com/feed/category/science/latest/rss',
+    category: 'ai',
+    enabled: true,
+  },
+  {
+    name: 'FT AI',
+    url: 'https://www.ft.com/artificial-intelligence?format=rss',
+    category: 'ai',
+    enabled: true,
+  },
 ];
+
+export interface Article {
+  id?: number;
+  title: string;
+  link: string;
+  content: string;
+  summary?: string;
+  source: string;
+  category: string;
+  publishedAt: Date;
+  fetchedAt: Date;
+  processed: boolean;
+}
+
+export interface LinkedInPost {
+  id?: number;
+  articleId: number;
+  content: string;
+  hashtags: string[];
+  createdAt: Date;
+  status: 'draft' | 'approved' | 'posted';
+  postedAt?: Date;
+}
