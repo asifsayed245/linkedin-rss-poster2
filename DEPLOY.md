@@ -2,7 +2,7 @@
 
 ## ⚠️ URGENT: Security Issue
 
-**Your HuggingFace token is exposed!** The token `[REDACTED_TOKEN]` was found in your `.env` file.
+**Your HuggingFace token is exposed!** The token `hf_***REDACTED***` was found in your `.env` file.
 
 ### Action Required:
 1. Go to https://huggingface.co/settings/tokens
@@ -20,8 +20,8 @@ I've set up the following files:
 1. **`render.yaml`** - Render.com deployment configuration
 2. **`deploy.bat`** - Windows deployment script (double-click to run)
 3. **`deploy.sh`** - Linux/Mac deployment script
-4. **`Updated package.json`** - Changed start script for production
-5. **`Updated .env.example`** - Removed exposed token
+4. **Updated `package.json`** - Changed start script for production
+5. **Updated `.env.example`** - Removed exposed token
 
 ---
 
@@ -31,7 +31,7 @@ I've set up the following files:
 
 ```bash
 # 1. Go to https://huggingface.co/settings/tokens
-# 2. Delete the old token: [REDACTED_TOKEN]
+# 2. Delete the old token: hf_***REDACTED***
 # 3. Create a new token
 # 4. Update your .env file with the new token
 ```
@@ -48,7 +48,7 @@ I've set up the following files:
 2. Initialize repository in the folder
 3. Stage all files (except node_modules/, dist/, data/, drafts/, .env)
 4. Commit with message: "Initial commit"
-5. Add remote: `https://github.com/asifsayed245/linkedin-rss-poster.git`
+5. Add remote: `https://github.com/asifsayed245/linkedin-rss-poster2.git`
 6. Push to main branch
 
 ### Step 3: Deploy on Render
@@ -56,7 +56,7 @@ I've set up the following files:
 1. Go to https://render.com
 2. Sign up/login with GitHub
 3. Click **"New +"** → **"Web Service"**
-4. Connect your GitHub repository: `asifsayed245/linkedin-rss-poster`
+4. Connect your GitHub repository: `asifsayed245/linkedin-rss-poster2`
 5. Render will automatically detect `render.yaml` and configure everything
 6. Click **"Create Web Service"**
 
