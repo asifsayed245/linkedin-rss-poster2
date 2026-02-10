@@ -39,10 +39,10 @@
     "rss-parser": "^3.13.0",
     "sqlite3": "^5.1.7",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
-  },
-  "devDependencies": {
+    "typescript": "^5.9.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cheerio": "^0.22.35"
+  },
+  "devDependencies": {
   }
 }
