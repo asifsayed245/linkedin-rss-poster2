@@ -63,7 +63,7 @@ export const RSS_SOURCES: RssSource[] = [
     name: 'Hacker News Top',
     url: 'https://news.ycombinator.com/rss',
     category: 'tech',
-    enabled: true,
+    enabled: false,
   },
   {
     name: 'OpenAI News',
@@ -106,4 +106,7 @@ export interface LinkedInPost {
   createdAt: Date;
   status: 'draft' | 'approved' | 'posted';
   postedAt?: Date;
+  imageUrl?: string;
+  infographicPath?: string;
+  hasImage?: boolean;
 }

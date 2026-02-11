@@ -78,12 +78,23 @@ export class Scheduler {
         console.log('\n🤖 Generating LinkedIn posts...\n');
         
         for (const article of unprocessed.slice(0, config.posts.maxPerDay)) {
-          const post = await this.generator.generatePost(article);
+          const post = await this.generator.generatePost(article, this.db);
           
           if (post) {
             const postId = this.db.createPost(post);
             if (postId) {
               console.log(`  ✅ Generated post for: "${article.title.substring(0, 60)}..."`);
+              
+              // Update post with image information if generated
+              if (post.imageUrl) {
+                this.db.updatePostWithImage(postId, post.imageUrl);
+                console.log(`     🎨 Image: ${post.imageUrl}`);
+              }
+              if (post.infographicPath) {
+                this.db.updatePostWithInfographic(postId, post.infographicPath);
+                console.log(`     📊 Infographic: ${post.infographicPath}`);
+              }
+              
               this.db.markArticleProcessed(article.id!);
             }
           } else {
@@ -91,7 +102,7 @@ export class Scheduler {
           }
           
           // Small delay to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
 
