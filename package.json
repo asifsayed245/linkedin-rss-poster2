@@ -43,6 +43,5 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/cheerio": "^0.22.35"
   },
-  "devDependencies": {
-  }
+  "devDependencies": {}
 }
