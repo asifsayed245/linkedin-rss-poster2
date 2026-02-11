@@ -45,6 +45,9 @@ export class DatabaseService {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         status TEXT DEFAULT 'draft',
         posted_at DATETIME,
+        image_url TEXT,
+        infographic_path TEXT,
+        has_image BOOLEAN DEFAULT 0,
         FOREIGN KEY (article_id) REFERENCES articles(id)
       )
     `);
@@ -55,6 +58,30 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_articles_processed ON articles(processed);
       CREATE INDEX IF NOT EXISTS idx_posts_status ON linkedin_posts(status);
     `);
+
+    // Migrate: Add missing columns to existing tables
+    this.migrateTables();
+  }
+
+  private migrateTables(): void {
+    // Check and add missing columns to linkedin_posts table
+    const columns = this.db.prepare("PRAGMA table_info(linkedin_posts)").all() as { name: string }[];
+    const columnNames = columns.map(c => c.name);
+
+    if (!columnNames.includes('image_url')) {
+      this.db.exec(`ALTER TABLE linkedin_posts ADD COLUMN image_url TEXT`);
+      console.log('✅ Migrated: Added image_url column');
+    }
+
+    if (!columnNames.includes('infographic_path')) {
+      this.db.exec(`ALTER TABLE linkedin_posts ADD COLUMN infographic_path TEXT`);
+      console.log('✅ Migrated: Added infographic_path column');
+    }
+
+    if (!columnNames.includes('has_image')) {
+      this.db.exec(`ALTER TABLE linkedin_posts ADD COLUMN has_image BOOLEAN DEFAULT 0`);
+      console.log('✅ Migrated: Added has_image column');
+    }
   }
 
   // Article methods
@@ -161,7 +188,7 @@ export class DatabaseService {
     }));
   }
 
-  getDraftsByCategory(category: string): (LinkedInPost & { title: string; link: string; source: string })[] {
+  getDraftsByCategory(category: string): (LinkedInPost & { title: string; link: string; source: string; category: string })[] {
     const stmt = this.db.prepare(`
       SELECT p.*, a.title, a.link, a.category, a.source
       FROM linkedin_posts p
@@ -176,6 +203,7 @@ export class DatabaseService {
       title: row.title,
       link: row.link,
       source: row.source,
+      category: row.category,
     }));
   }
 
@@ -259,7 +287,91 @@ export class DatabaseService {
       createdAt: new Date(row.created_at),
       status: row.status,
       postedAt: row.posted_at ? new Date(row.posted_at) : undefined,
+      imageUrl: row.image_url,
+      infographicPath: row.infographic_path,
+      hasImage: Boolean(row.has_image),
     };
+  }
+
+  // Image-related methods
+  updatePostWithImage(postId: number, imageUrl: string): void {
+    const stmt = this.db.prepare(`
+      UPDATE linkedin_posts 
+      SET image_url = ?, has_image = 1 
+      WHERE id = ?
+    `);
+    stmt.run(imageUrl, postId);
+  }
+
+  updatePostWithInfographic(postId: number, infographicPath: string): void {
+    const stmt = this.db.prepare(`
+      UPDATE linkedin_posts 
+      SET infographic_path = ? 
+      WHERE id = ?
+    `);
+    stmt.run(infographicPath, postId);
+  }
+
+  getPostWithImages(postId: number): (LinkedInPost & { 
+    title: string; 
+    link: string; 
+    source: string; 
+    category: string;
+    imageUrl?: string;
+    infographicPath?: string;
+    hasImage: boolean;
+  }) | null {
+    const stmt = this.db.prepare(`
+      SELECT p.*, a.title, a.link, a.category, a.source
+      FROM linkedin_posts p
+      JOIN articles a ON p.article_id = a.id
+      WHERE p.id = ?
+    `);
+    
+    const row = stmt.get(postId) as any;
+    if (!row) return null;
+    
+    return {
+      ...this.rowToPost(row),
+      title: row.title,
+      link: row.link,
+      source: row.source,
+      category: row.category,
+      imageUrl: row.image_url,
+      infographicPath: row.infographic_path,
+      hasImage: Boolean(row.has_image),
+    };
+  }
+
+  getDraftsWithImages(limit: number = 10): (LinkedInPost & { 
+    title: string; 
+    link: string; 
+    source: string; 
+    category: string;
+    imageUrl?: string;
+    infographicPath?: string;
+    hasImage: boolean;
+  })[] {
+    const stmt = this.db.prepare(`
+      SELECT p.*, a.title, a.link, a.category, a.source
+      FROM linkedin_posts p
+      JOIN articles a ON p.article_id = a.id
+      WHERE p.status = 'draft'
+      ORDER BY p.created_at DESC
+      LIMIT ?
+    `);
+    
+    const rows = stmt.all(limit) as any[];
+    return rows.map(row => ({
+      ...this.rowToPost(row),
+      title: row.title,
+      link: row.link,
+      source: row.source,
+      category: row.category,
+      imageUrl: row.image_url,
+      infographicPath: row.infographic_path,
+      hasImage: Boolean(row.has_image),
+    }));
   }
 
   close(): void {
