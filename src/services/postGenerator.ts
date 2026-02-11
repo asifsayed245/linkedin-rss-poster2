@@ -1,6 +1,9 @@
 import axios from 'axios';
 import { Article, LinkedInPost } from '../config/sources';
 import { config } from '../config/config';
+import { ImageGenerator } from './imageGenerator';
+import { InfographicGenerator } from './infographicGenerator';
+import { DatabaseService } from './database';
 
 enum LogLevel {
   DEBUG = 'DEBUG',
@@ -49,8 +52,15 @@ class Logger {
 export class PostGenerator {
   private readonly maxRetries = 3;
   private readonly retryDelay = 2000;
+  private imageGenerator: ImageGenerator;
+  private infographicGenerator: InfographicGenerator;
 
-  async generatePost(article: Article): Promise<LinkedInPost | null> {
+  constructor() {
+    this.imageGenerator = new ImageGenerator();
+    this.infographicGenerator = new InfographicGenerator();
+  }
+
+  async generatePost(article: Article, db: DatabaseService): Promise<LinkedInPost | null> {
     Logger.info('Starting post generation', { articleTitle: article.title, source: article.source });
 
     try {
@@ -76,6 +86,11 @@ export class PostGenerator {
         hashtagCount: hashtags.length 
       });
 
+      console.log(`🔍 DEBUG: Calling generateVisualContent for ${article.title}`);
+
+      // Generate AI image and infographic before returning the post
+      await this.generateVisualContent(article, post, db);
+
       return post;
     } catch (error) {
       Logger.error('Post generation failed', { 
@@ -83,6 +98,63 @@ export class PostGenerator {
         error: (error as Error).message 
       });
       return null;
+    }
+  }
+
+  /**
+   * Generate AI image and infographic for the post
+   */
+  private async generateVisualContent(
+    article: Article, 
+    post: LinkedInPost, 
+    db: DatabaseService
+  ): Promise<void> {
+    try {
+      console.log(`🔍 DEBUG: Inside generateVisualContent for ${article.title}`);
+      Logger.info('Generating visual content', { articleTitle: article.title });
+
+      // Step 1: Generate AI image with full content for better concept extraction
+      const generatedImage = await this.imageGenerator.generatePostImage({
+        title: article.title,
+        summary: article.summary || '',
+        category: article.category,
+        content: article.content
+      });
+
+      if (generatedImage) {
+        post.imageUrl = generatedImage.url;
+        post.hasImage = true;
+        Logger.info('AI image generated', { imageUrl: generatedImage.url });
+      }
+
+      // Step 2: Create infographic with text overlay
+      const keyPoints = this.infographicGenerator.extractKeyPoints(post.content, 5);
+      const infographicData = {
+        title: article.title,
+        keyPoints,
+        source: article.source,
+        category: article.category,
+        articleUrl: article.link,
+        imageUrl: generatedImage?.url
+      };
+
+      const infographic = this.infographicGenerator.generateInfographic(infographicData);
+      post.infographicPath = `/infographics/${infographic.filename}`;
+      Logger.info('Infographic generated', { path: post.infographicPath });
+
+      // Step 3: Update database with image info (if post was saved)
+      // Note: The post will be saved by the scheduler after this method returns
+      Logger.info('Visual content generation complete', { 
+        hasImage: !!post.imageUrl,
+        hasInfographic: !!post.infographicPath 
+      });
+
+    } catch (error) {
+      Logger.warn('Visual content generation failed', { 
+        articleTitle: article.title, 
+        error: (error as Error).message 
+      });
+      // Continue without visual content - post is still valid
     }
   }
 

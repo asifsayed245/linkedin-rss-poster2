@@ -1,6 +1,6 @@
 {
   "name": "linkedin-rss-poster",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Fetch tech & AI news from RSS feeds and generate LinkedIn posts",
   "main": "dist/web.js",
   "engines": {

@@ -7,7 +7,7 @@ export const config = {
   // Hugging Face API
   huggingface: {
     token: process.env.HUGGINGFACE_TOKEN || '',
-    model: process.env.SUMMARIZATION_MODEL || 'facebook/bart-large-cnn',
+    model: process.env.SUMMARIZATION_MODEL || 'sshleifer/distilbart-cnn-12-6',
     timeout: 30000,
   },
   
